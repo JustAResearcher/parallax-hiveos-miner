@@ -211,6 +211,11 @@ if [[ -d /etc/ld.so.conf.d ]]; then
     done < <(cat /etc/ld.so.conf.d/*.conf 2>/dev/null)
 fi
 
+# HiveOS-specific library paths (CUDA libs live here)
+for p in /hive/lib /hive/lib64; do
+    [[ -d "$p" ]] && LIB_PATH="$LIB_PATH:$p"
+done
+
 # Add well-known paths that may not be in ldconfig
 for p in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/local/lib /usr/lib; do
     [[ -d "$p" ]] && LIB_PATH="$LIB_PATH:$p"
