@@ -27,7 +27,7 @@ try {
     # Create staging directory
     New-Item -ItemType Directory -Path $stagingDir | Out-Null
 
-    # Copy all miner files
+    # Copy all miner files (LF line endings, UTF-8 no BOM)
     $files = @(
         "h-manifest.conf",
         "h-config.sh",
@@ -40,27 +40,59 @@ try {
 
     foreach ($f in $files) {
         if (Test-Path $f) {
-            # Convert line endings to LF (Linux) during copy
             $content = Get-Content $f -Raw
             $content = $content -replace "`r`n", "`n"
             [System.IO.File]::WriteAllText(
                 (Join-Path (Resolve-Path $stagingDir) $f),
                 $content,
-                [System.Text.UTF8Encoding]::new($false)  # UTF-8 no BOM
+                [System.Text.UTF8Encoding]::new($false)
             )
         } else {
             Write-Warning "Missing file: $f"
         }
     }
 
-    # Create tar.gz using Windows built-in tar
+    # Build tar.gz with Python to set Unix executable permissions (0o755)
+    # Windows tar doesn't preserve Unix mode bits, causing "Permission denied"
     Write-Host ""
-    Write-Host "Creating $archiveName ..." -ForegroundColor Cyan
-    tar -czf $archiveName $stagingDir
+    Write-Host "Creating $archiveName (with Unix permissions) ..." -ForegroundColor Cyan
+
+    $pyScriptPath = Join-Path $scriptDir "_build_tar.py"
+    @"
+import tarfile, os, sys
+
+archive = sys.argv[1]
+srcdir  = sys.argv[2]
+
+executable_exts = {'.sh', '.py'}
+
+with tarfile.open(archive, 'w:gz') as tar:
+    for root, dirs, fnames in os.walk(srcdir):
+        for fn in sorted(fnames):
+            fpath = os.path.join(root, fn)
+            info = tar.gettarinfo(fpath)
+            ext = os.path.splitext(fn)[1].lower()
+            if ext in executable_exts:
+                info.mode = 0o755
+            else:
+                info.mode = 0o644
+            info.uid = 0
+            info.gid = 0
+            info.uname = 'root'
+            info.gname = 'root'
+            with open(fpath, 'rb') as f:
+                tar.addfile(info, f)
+
+print(f'Created {archive} with correct Unix permissions')
+"@ | Set-Content -Path $pyScriptPath -Encoding UTF8
+
+    py $pyScriptPath $archiveName $stagingDir
 
     if ($LASTEXITCODE -ne 0) {
-        throw "tar failed with exit code $LASTEXITCODE"
+        throw "Python tar creation failed"
     }
+
+    Remove-Item $pyScriptPath -Force -ErrorAction SilentlyContinue
 
     # Clean up staging
     Remove-Item $stagingDir -Recurse -Force
