@@ -101,11 +101,85 @@ echo "  API:     http://localhost:$API_PORT"
 [[ -n "$EXTRA_ARGS" ]] && echo "  Extra:   $EXTRA_ARGS"
 echo ""
 
+# ── GPU auto-tuning ──────────────────────────────────────────────────────────
+# Detect GPU model and set optimal HashWarp parameters.
+# User can override via extra_args in flight sheet Extra Config JSON.
+
+if [[ -z "$EXTRA_ARGS" ]] || ! echo "$EXTRA_ARGS" | grep -q "cl-global-work"; then
+    # No user-specified tuning — auto-detect GPU and apply optimal settings
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs)
+
+    case "$GPU_NAME" in
+        *5090*)
+            # RTX 5090 (Blackwell, 21760 cores, 32GB) — tested optimal
+            TUNING="--cl-global-work 4194304 --cl-local-work 256 --noeval"
+            ;;
+        *5080*)
+            # RTX 5080 (Blackwell, 10752 cores, 16GB)
+            TUNING="--cl-global-work 2097152 --cl-local-work 256 --noeval"
+            ;;
+        *4090*)
+            # RTX 4090 (Ada, 16384 cores, 24GB)
+            TUNING="--cl-global-work 4194304 --cl-local-work 256 --noeval"
+            ;;
+        *"4070 Ti Super"*|*"4070 SUPER Ti"*)
+            # RTX 4070 Ti Super (Ada, 8448 cores, 16GB) — your rigs
+            TUNING="--cl-global-work 2097152 --cl-local-work 128 --noeval"
+            ;;
+        *"4070 Ti"*)
+            # RTX 4070 Ti (Ada, 7680 cores, 12GB)
+            TUNING="--cl-global-work 2097152 --cl-local-work 128 --noeval"
+            ;;
+        *4070*Super*|*4070*SUPER*)
+            # RTX 4070 Super (Ada, 7168 cores, 12GB)
+            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
+            ;;
+        *4070*)
+            # RTX 4070 (Ada, 5888 cores, 12GB)
+            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
+            ;;
+        *4060*Ti*|*4060*TI*)
+            # RTX 4060 Ti (Ada, 4352 cores, 8/16GB)
+            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
+            ;;
+        *4060*)
+            # RTX 4060 (Ada, 3072 cores, 8GB)
+            TUNING="--cl-global-work 524288 --cl-local-work 128 --noeval"
+            ;;
+        *3090*|*3080*)
+            # RTX 30-series high-end (Ampere)
+            TUNING="--cl-global-work 2097152 --cl-local-work 128 --noeval"
+            ;;
+        *3070*|*3060*Ti*)
+            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
+            ;;
+        *3060*)
+            TUNING="--cl-global-work 524288 --cl-local-work 128 --noeval"
+            ;;
+        *)
+            # Unknown GPU — safe defaults
+            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
+            ;;
+    esac
+
+    echo "GPU detected:  $GPU_NAME"
+    echo "Auto-tuning:   $TUNING"
+    echo ""
+    EXTRA_ARGS="$TUNING $EXTRA_ARGS"
+else
+    echo "Using user-specified tuning from extra_args"
+    echo ""
+fi
+
 # ── Launch HashWarp in foreground ────────────────────────────────────────────
 # --HWMON 1    → report GPU temp & fan (needed for HiveOS stats)
 # --nocolor    → clean log output
 # --syslog     → strip timestamps (HiveOS adds its own)
 # --api-port   → API for h-stats.sh to query
+# --farm-recheck 200 → check for new work every 200ms (responsive to new blocks)
+# --report-hashrate → report hashrate back to node
+
+FARM_OPTS="--farm-recheck 200 --report-hashrate"
 
 LIBS_DIR="$MINER_DIR/libs"
 if [[ -d "$LIBS_DIR" && -f "$LIBS_DIR/ld-linux-x86-64.so.2" ]]; then
@@ -159,6 +233,7 @@ if [[ -d "$LIBS_DIR" && -f "$LIBS_DIR/ld-linux-x86-64.so.2" ]]; then
         --HWMON 1 \
         --nocolor \
         --syslog \
+        $FARM_OPTS \
         $EXTRA_ARGS
 else
     # ── Native mode: system glibc is new enough ─────────────────────────
@@ -168,5 +243,6 @@ else
         --HWMON 1 \
         --nocolor \
         --syslog \
+        $FARM_OPTS \
         $EXTRA_ARGS
 fi
