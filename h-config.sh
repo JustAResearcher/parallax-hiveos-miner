@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ###############################################################################
-# Parallax Miner for HiveOS -- Configuration Generator
+# Parallax Miner for HiveOS -- Configuration Generator  (v1.4)
 #
 # Reads HiveOS flight sheet variables and writes config.json
 #
@@ -17,28 +17,29 @@ cd "$MINER_DIR"
 # Source HiveOS rig config for CUSTOM_* variables
 [[ -f /hive-config/rig.conf ]] && source /hive-config/rig.conf
 
+# -- Pool / node URL --
+POOL_URL="$CUSTOM_URL"
+
+# ── GUARD ────────────────────────────────────────────────────────────────────
+# HiveOS may call h-config.sh multiple times. On restarts the CUSTOM_*
+# environment variables are sometimes empty.  If we already have a valid
+# config.json and no new CUSTOM_URL was provided, keep the existing config
+# unconditionally.  This avoids overwriting a good config with defaults.
+# No jq dependency — just a simple file-existence check.
+if [[ -z "$POOL_URL" && -s "$MINER_DIR/config.json" ]]; then
+    echo "h-config.sh: CUSTOM_URL is empty but config.json already exists — keeping it."
+    cat "$MINER_DIR/config.json"
+    exit 0
+fi
+
+# If CUSTOM_URL is still empty here, this is a truly fresh install with no
+# flight sheet.  Fall back to localhost so the config file is at least valid.
+[[ -z "$POOL_URL" ]] && POOL_URL="http://127.0.0.1:8545"
+
 # -- Parse wallet & worker from template --
 WALLET=$(echo "$CUSTOM_TEMPLATE" | cut -d'.' -f1)
 WORKER=$(echo "$CUSTOM_TEMPLATE" | cut -d'.' -f2-)
 [[ -z "$WORKER" || "$WORKER" == "$WALLET" ]] && WORKER="${WORKER_NAME:-$(hostname)}"
-
-# -- Pool / node URL --
-POOL_URL="$CUSTOM_URL"
-
-# GUARD: If no CUSTOM_URL is set (miner restart without env vars) and a valid
-# config already exists, keep the existing config. This prevents overwriting
-# a good config with defaults on auto-restart.
-if [[ -z "$POOL_URL" && -f config.json ]]; then
-    existing_url=$(jq -r '.pool_url // ""' config.json 2>/dev/null)
-    if [[ -n "$existing_url" && "$existing_url" != "http://127.0.0.1:8545" ]]; then
-        echo "Keeping existing config (no CUSTOM_URL in env):"
-        cat config.json
-        exit 0
-    fi
-fi
-
-# Fallback only for truly fresh installs with no flight sheet
-[[ -z "$POOL_URL" ]] && POOL_URL="http://127.0.0.1:8545"
 
 # Auto-detect mode from URL scheme
 #   http://...     -> "getwork"  (run embedded stratum proxy + SRBMiner)
