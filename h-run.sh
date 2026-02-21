@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
 ###############################################################################
-# Parallax Miner for HiveOS — Runner
+# Parallax Miner for HiveOS — Runner  (v2.0 — HashWarp)
 #
-# Two modes (auto-detected from Pool URL):
+# HashWarp connects directly to the prlx node via getwork — no stratum
+# proxy needed. Much simpler than the previous SRBMiner setup.
 #
-#   GETWORK MODE  (Pool URL = http://IP:8545)
-#     Starts an embedded stratum-to-getwork proxy that connects to your
-#     prlx full node, then launches SRBMiner pointing at the local proxy.
-#     Each rig is fully self-contained — no separate proxy process needed.
-#
-#   STRATUM MODE  (Pool URL = IP:PORT or stratum+tcp://IP:PORT)
-#     Connects SRBMiner directly to an external stratum proxy or pool.
-#
+# Flight sheet Pool URL:  http://192.168.x.x:8545  (your prlx node RPC)
 ###############################################################################
 
 MINER_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,17 +20,12 @@ if [[ ! -f config.json ]]; then
 fi
 
 # ── Read config ──────────────────────────────────────────────────────────────
-WALLET=$(jq -r     '.wallet     // ""'       config.json)
-WORKER=$(jq -r     '.worker     // "worker"' config.json)
 POOL_URL=$(jq -r   '.pool_url   // ""'       config.json)
-MODE=$(jq -r       '.mode       // "getwork"' config.json)
-PROXY_PORT=$(jq -r '.proxy_port // 4444'     config.json)
-API_PORT=$(jq -r   '.api_port   // 21550'   config.json)
+API_PORT=$(jq -r   '.api_port   // 21550'    config.json)
 EXTRA_ARGS=$(jq -r '.extra_args // ""'       config.json)
 
 # ── Safety net: recover pool URL if config has localhost default ──────────────
 SAVED_URL_FILE="/tmp/parallax_saved_pool_url"
-SAVED_WALLET_FILE="/tmp/parallax_saved_wallet"
 
 if [[ "$POOL_URL" == "http://127.0.0.1:8545" || -z "$POOL_URL" ]]; then
     echo "WARNING: config.json has default/empty pool_url ($POOL_URL)"
@@ -69,141 +58,58 @@ if [[ "$POOL_URL" == "http://127.0.0.1:8545" || -z "$POOL_URL" ]]; then
     fi
     # Save it so future restarts work
     echo "$POOL_URL" > "$SAVED_URL_FILE"
-    # Re-detect mode
-    if [[ "$POOL_URL" == http://* || "$POOL_URL" == https://* ]]; then
-        MODE="getwork"
-    else
-        MODE="stratum"
-    fi
 fi
 
-# Recover wallet too if empty
-if [[ -z "$WALLET" && -s "$SAVED_WALLET_FILE" ]]; then
-    WALLET=$(cat "$SAVED_WALLET_FILE")
-    echo "  Recovered wallet from $SAVED_WALLET_FILE: $WALLET"
+# ── Convert URL to HashWarp getwork format ───────────────────────────────────
+# Flight sheet URL: http://192.168.x.x:8545 → getwork://192.168.x.x:8545
+if [[ "$POOL_URL" == http://* ]]; then
+    CONNECT_URL="getwork://${POOL_URL#http://}"
+elif [[ "$POOL_URL" == https://* ]]; then
+    CONNECT_URL="getwork://${POOL_URL#https://}"
+elif [[ "$POOL_URL" == getwork://* || "$POOL_URL" == stratum* ]]; then
+    CONNECT_URL="$POOL_URL"
+else
+    # Bare IP:PORT
+    CONNECT_URL="getwork://${POOL_URL}"
 fi
 
-# ── Locate SRBMiner ──────────────────────────────────────────────────────────
-SRBMINER=""
-for sp in \
-    "$MINER_DIR/srbminer/SRBMiner-MULTI" \
-    "/hive/miners/srbminer-multi/SRBMiner-MULTI" \
-    "/hive/miners/srbminer/SRBMiner-MULTI" \
-    /hive/miners/srbminer/*/SRBMiner-MULTI \
-    /hive/miners/srbminer-multi/*/SRBMiner-MULTI; do
-    if [[ -x "$sp" ]]; then
-        SRBMINER="$sp"
-        break
-    fi
-done
+# ── Locate HashWarp ──────────────────────────────────────────────────────────
+HASHWARP="$MINER_DIR/hashwarp"
 
-if [[ -z "$SRBMINER" ]]; then
-    echo "SRBMiner-Multi not found — running installer..."
+if [[ ! -x "$HASHWARP" ]]; then
+    echo "HashWarp not found — running installer..."
     bash h-install.sh
-    SRBMINER="$MINER_DIR/srbminer/SRBMiner-MULTI"
-    if [[ ! -x "$SRBMINER" ]]; then
-        echo "FATAL: Could not find or install SRBMiner-Multi!"
-        echo "Install it manually: hive-miners-install srbminer"
+    if [[ ! -x "$HASHWARP" ]]; then
+        echo "FATAL: Could not find or install HashWarp!"
         exit 1
     fi
 fi
 
-echo "SRBMiner: $SRBMINER"
+# ── Banner ───────────────────────────────────────────────────────────────────
+echo "╔══════════════════════════════════════════════╗"
+echo "║   Parallax Solo Miner — HiveOS (HashWarp)   ║"
+echo "╠══════════════════════════════════════════════╣"
+echo "║   Node:   $POOL_URL"
+echo "║   Connect: $CONNECT_URL"
+echo "║   API:    http://localhost:$API_PORT"
+echo "╚══════════════════════════════════════════════╝"
 echo ""
 
-# ── Cleanup handler ──────────────────────────────────────────────────────────
-PROXY_PID=""
-cleanup() {
-    echo "Stopping parallax miner..."
-    [[ -n "$PROXY_PID" ]] && kill "$PROXY_PID" 2>/dev/null
-    pkill -f "xhash_stratum_proxy" 2>/dev/null
-    wait 2>/dev/null
-}
-trap cleanup EXIT INT TERM
-
-# ── Kill lingering processes from previous runs ──────────────────────────────
-pkill -f "xhash_stratum_proxy" 2>/dev/null
-sleep 0.5
-
-# ── Determine pool connection ────────────────────────────────────────────────
-if [[ "$MODE" == "getwork" ]]; then
-    ###########################################################################
-    # GETWORK MODE — embedded stratum proxy → prlx node RPC
-    ###########################################################################
-    echo "╔══════════════════════════════════════════════╗"
-    echo "║   Parallax Solo Miner — HiveOS              ║"
-    echo "║   Mode: Self-contained (embedded proxy)     ║"
-    echo "╠══════════════════════════════════════════════╣"
-    echo "║   Node:   $POOL_URL"
-    echo "║   Proxy:  localhost:$PROXY_PORT"
-    echo "║   Wallet: ${WALLET:0:12}...${WALLET: -6}"
-    echo "║   Worker: $WORKER"
-    echo "╚══════════════════════════════════════════════╝"
-    echo ""
-
-    # Start embedded stratum proxy
-    echo "Starting stratum proxy → $POOL_URL ..."
-    python3 "$MINER_DIR/xhash_stratum_proxy.py" \
-        --rpc-url "$POOL_URL" \
-        --host 127.0.0.1 \
-        --port "$PROXY_PORT" \
-        --poll 0.5 \
-        --log-level INFO \
-        >> "$MINER_DIR/proxy.log" 2>&1 &
-    PROXY_PID=$!
-
-    sleep 3
-    if ! kill -0 "$PROXY_PID" 2>/dev/null; then
-        echo "FATAL: Stratum proxy failed to start!"
-        echo "--- last 30 lines of proxy.log ---"
-        tail -30 "$MINER_DIR/proxy.log"
-        echo "---"
-        echo ""
-        echo "Check that your prlx node is running and accessible at $POOL_URL"
-        echo "Node must be started with: --http --http.addr 0.0.0.0 --mine"
-        exit 1
-    fi
-    echo "Proxy running (PID $PROXY_PID)"
-    echo ""
-
-    POOL_CONNECT="stratum+tcp://127.0.0.1:${PROXY_PORT}"
-else
-    ###########################################################################
-    # STRATUM MODE — connect SRBMiner directly to external stratum
-    ###########################################################################
-    echo "╔══════════════════════════════════════════════╗"
-    echo "║   Parallax Solo Miner — HiveOS              ║"
-    echo "║   Mode: Direct stratum                      ║"
-    echo "╠══════════════════════════════════════════════╣"
-    echo "║   Pool:   $POOL_URL"
-    echo "║   Wallet: ${WALLET:0:12}...${WALLET: -6}"
-    echo "║   Worker: $WORKER"
-    echo "╚══════════════════════════════════════════════╝"
-    echo ""
-
-    if [[ "$POOL_URL" == stratum* ]]; then
-        POOL_CONNECT="$POOL_URL"
-    else
-        POOL_CONNECT="stratum+tcp://${POOL_URL}"
-    fi
-fi
-
-# ── Launch SRBMiner-Multi ────────────────────────────────────────────────────
-echo "Starting SRBMiner-Multi (algorithm: xhash)"
-echo "  Pool:    $POOL_CONNECT"
-echo "  Wallet:  $WALLET"
-echo "  Worker:  $WORKER"
+echo "Starting HashWarp..."
+echo "  Pool:    $CONNECT_URL"
 echo "  API:     http://localhost:$API_PORT"
 [[ -n "$EXTRA_ARGS" ]] && echo "  Extra:   $EXTRA_ARGS"
 echo ""
 
-# Run SRBMiner in foreground — HiveOS manages the process lifecycle
-"$SRBMINER" \
-    --algorithm xhash \
-    --pool "$POOL_CONNECT" \
-    --wallet "$WALLET" \
-    --worker "$WORKER" \
-    --api-enable \
+# ── Launch HashWarp in foreground ────────────────────────────────────────────
+# --HWMON 1    → report GPU temp & fan (needed for HiveOS stats)
+# --nocolor    → clean log output
+# --syslog     → strip timestamps (HiveOS adds its own)
+# --api-port   → API for h-stats.sh to query
+"$HASHWARP" \
+    -P "$CONNECT_URL" \
     --api-port "$API_PORT" \
-    --disable-cpu \
+    --HWMON 1 \
+    --nocolor \
+    --syslog \
     $EXTRA_ARGS

@@ -1,9 +1,7 @@
 # Parallax Solo Miner for HiveOS
 
-Solo mine **Parallax ($LAX)** on HiveOS rigs with zero configuration headaches.
-
-Each rig runs a self-contained stratum-to-getwork bridge — just point the flight
-sheet at your Parallax full node and start mining.
+Solo mine **Parallax ($LAX)** on HiveOS rigs using **HashWarp** — the official
+Parallax GPU miner. Zero dev fee, direct getwork to your node.
 
 ---
 
@@ -51,7 +49,7 @@ ipconfig | findstr "IPv4"
 | Custom Miner Field | Value |
 |---|---|
 | **Miner name** | `parallax-miner` |
-| **Installation URL** | `https://github.com/YOUR_USER/parallax-hiveos-miner/releases/download/v1.0/parallax-miner-v1.0.tar.gz` |
+| **Installation URL** | `https://github.com/JustAResearcher/parallax-hiveos-miner/releases/download/v2.0/parallax-miner-v2.0.tar.gz` |
 | **Hash algorithm** | `xhash` |
 | **Wallet and worker template** | `%WAL%.%WORKER_NAME%` |
 | **Pool URL** | `http://YOUR_PC_IP:8545` |
@@ -76,21 +74,15 @@ On the Parallax node's console you'll see
 ```
   HiveOS Rig                          Windows PC
  ┌──────────────────────┐         ┌──────────────────┐
- │  SRBMiner-Multi      │         │  prlx full node  │
- │    (xhash GPU miner) │         │  (eth_getWork)   │
- │         │             │         │       ▲          │
- │         ▼             │  HTTP   │       │          │
- │  Stratum Proxy ───────┼────────►│  Port 8545      │
- │  (embedded, auto)     │         │                  │
+ │  HashWarp            │ getwork │  prlx full node  │
+ │  (xhash GPU miner)  ├────────►│  (eth_getWork)   │
+ │                      │  HTTP   │  Port 8545       │
+ │  CUDA 12 / OpenCL   │◄────────┤  (eth_submitWork) │
  └──────────────────────┘         └──────────────────┘
 ```
 
-Each HiveOS rig runs:
-1. **Stratum proxy** (Python, embedded) — translates stratum → getwork
-2. **SRBMiner-Multi** — GPU mining via local stratum proxy
-
-The proxy polls `eth_getWork` from your prlx node and pushes work to SRBMiner
-via stratum protocol. Solutions are forwarded back via `eth_submitWork`.
+HashWarp connects **directly** to your prlx node via getwork protocol.
+No stratum proxy needed — one simple process per rig.
 
 ---
 
@@ -100,44 +92,28 @@ The **Extra config argument** field accepts JSON:
 
 ```json
 {
-    "extra_args": "--gpu-id 0,1 --gpu-intensity 25",
-    "api_port": 21550,
-    "proxy_port": 4444
+    "extra_args": "--cl-global-work 4194304 --cl-local-work 256",
+    "api_port": 21550
 }
 ```
 
 | Key | Default | Description |
 |---|---|---|
-| `extra_args` | `""` | Extra SRBMiner command line flags |
-| `api_port` | `21550` | SRBMiner API port (for stats) |
-| `proxy_port` | `4444` | Local stratum proxy port |
+| `extra_args` | `""` | Extra HashWarp command line flags |
+| `api_port` | `21550` | HashWarp API port (for stats reporting) |
 
 ### Useful `extra_args`
 
 | Flag | Description |
 |---|---|
-| `--gpu-id 0,1,2` | Select specific GPUs |
-| `--gpu-intensity 25` | Adjust intensity (higher = more hash, more power) |
-| `--gpu-boost 1` | Enable GPU boost |
-| `--log-file srbminer.log` | Log to file |
-
----
-
-## Alternative: Direct Stratum Mode
-
-If you prefer running a **centralized stratum proxy** on your Windows PC
-(instead of one per rig), set the **Pool URL** to the proxy address:
-
-| Field | Value |
-|---|---|
-| **Pool URL** | `192.168.68.78:4444` |
-
-In this mode, no per-rig proxy is started — SRBMiner connects directly.
-
-You must run `xhash_stratum_proxy.py` on your Windows PC separately:
-```
-python xhash_stratum_proxy.py --rpc-url http://127.0.0.1:8545 --port 4444
-```
+| `--cl-devices 0 1 2` | Select specific GPUs (OpenCL) |
+| `--cl-global-work 4194304` | Global work size (power of 2, tune for perf) |
+| `--cl-local-work 256` | Local work size (64, 128, or 256) |
+| `--noeval` | Skip host re-evaluation of nonces (faster submit) |
+| `--display-interval 10` | Stats display interval in seconds |
+| `--farm-recheck 200` | Getwork polling interval in ms (default 500) |
+| `-G` | Force OpenCL only (default: auto-detect) |
+| `-v 1` | Verbose stratum messages |
 
 ---
 
@@ -155,38 +131,40 @@ New-NetFirewallRule -DisplayName "Parallax RPC (LAN)" `
 
 ## Supported GPUs
 
-| GPU | Status |
-|---|---|
-| RTX 4070 Ti Super | Tested, works great |
-| RTX 4080/4090 | Should work (Ada Lovelace) |
-| RTX 3060-3090 | Should work (Ampere) |
-| RTX 5090 | Use HashWarp instead (SRBMiner kernel issue on Blackwell) |
-| AMD RX 6000/7000 | Should work with SRBMiner OpenCL |
+| GPU | Build | Status |
+|---|---|---|
+| RTX 4070 Ti Super | CUDA 12 | Tested, works |
+| RTX 4080/4090 | CUDA 12 | Should work (Ada Lovelace) |
+| RTX 3060-3090 | CUDA 12 | Should work (Ampere) |
+| RTX 5090 | CUDA 12 / OpenCL | Tested with OpenCL |
+| AMD RX 6000/7000 | OpenCL | Use OpenCL build |
+
+> **Note:** This package includes the CUDA 12 build for NVIDIA GPUs.
+> For AMD GPUs, modify `h-install.sh` to download the OpenCL build instead.
 
 ---
 
 ## Troubleshooting
 
-### "Stratum proxy failed to start"
-- Check that your prlx node is running
-- Verify the Pool URL is correct (e.g., `http://192.168.68.78:8545`)
-- Make sure port 8545 is open in Windows Firewall
-- Confirm mining is enabled: `prlx attach --exec "miner.start(1)"`
-
 ### Hashrate shows 0
-- Wait 30-60 seconds for DAG generation
-- Check `proxy.log` on the rig: `cat /hive/miners/custom/parallax-miner/proxy.log`
-- Verify the prlx node has `--mine` flag and mining is active
+- Wait 30-60 seconds for DAG generation on first start
+- Verify the prlx node is running and accessible: `curl http://YOUR_PC_IP:8545`
+- Confirm mining is enabled on the node: `--mine` flag
 
-### "SRBMiner not found"
-- HiveOS usually has SRBMiner pre-installed
-- If not, install via HiveOS: **Workers** → **Miners** → install SRBMiner-Multi
-- Or let `h-install.sh` download it automatically
+### "HashWarp not found"
+- Check `h-install.sh` ran successfully
+- Verify internet connectivity on the rig
+- Try reinstalling: `bash /hive/miners/custom/parallax-miner/h-install.sh`
 
 ### Rig shows "offline" in HiveOS
-- This means h-stats.sh cannot read SRBMiner API
-- Check if SRBMiner is actually running: `screen -r`
-- Verify API port with: `curl http://127.0.0.1:21550`
+- h-stats.sh cannot reach HashWarp API
+- Check if HashWarp is running: `screen -r`
+- Test API: `echo '{"id":1,"jsonrpc":"2.0","method":"miner_ping"}' | nc 127.0.0.1 21550`
+
+### Connection refused / no work
+- Verify prlx node has `--http.addr "0.0.0.0"` (not just localhost)
+- Check Windows Firewall allows port 8545 from LAN
+- Verify node is synced and mining: `prlx attach --exec "eth.mining"`
 
 ---
 
@@ -195,10 +173,10 @@ New-NetFirewallRule -DisplayName "Parallax RPC (LAN)" `
 On your Windows PC with the repo cloned:
 
 ```powershell
-.\build_release.ps1
+.\build_release.ps1 -Version "2.0"
 ```
 
-This creates `parallax-miner-v1.0.tar.gz` ready for GitHub Releases upload.
+This creates `parallax-miner-v2.0.tar.gz` ready for GitHub Releases upload.
 
 ---
 
@@ -206,18 +184,16 @@ This creates `parallax-miner-v1.0.tar.gz` ready for GitHub Releases upload.
 
 ```
 parallax-miner/
-├── h-manifest.conf          # HiveOS miner identity
-├── h-config.sh              # Generates config from flight sheet
-├── h-run.sh                 # Starts proxy + SRBMiner
-├── h-stats.sh               # Reports stats to HiveOS dashboard
-├── h-install.sh             # Downloads SRBMiner if needed
-├── xhash_stratum_proxy.py   # Stratum-to-getwork bridge
-└── README.md                # This file
+├── h-manifest.conf     # HiveOS miner identity
+├── h-config.sh         # Generates config from flight sheet
+├── h-run.sh            # Launches HashWarp with getwork
+├── h-stats.sh          # Reports stats to HiveOS dashboard
+├── h-install.sh        # Downloads HashWarp if needed
+└── README.md           # This file
 ```
 
 ---
 
 ## License
 
-MIT. The stratum proxy and HiveOS integration scripts are open source.
-SRBMiner-Multi has a 3% dev fee on xhash.
+MIT. HashWarp is the official Parallax miner with 0% dev fee.

@@ -34,7 +34,6 @@ try {
         "h-run.sh",
         "h-stats.sh",
         "h-install.sh",
-        "xhash_stratum_proxy.py",
         "README.md"
     )
 
