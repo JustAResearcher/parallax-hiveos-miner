@@ -106,10 +106,37 @@ echo ""
 # --nocolor    → clean log output
 # --syslog     → strip timestamps (HiveOS adds its own)
 # --api-port   → API for h-stats.sh to query
-"$HASHWARP" \
-    -P "$CONNECT_URL" \
-    --api-port "$API_PORT" \
-    --HWMON 1 \
-    --nocolor \
-    --syslog \
-    $EXTRA_ARGS
+
+LIBS_DIR="$MINER_DIR/libs"
+if [[ -d "$LIBS_DIR" && -f "$LIBS_DIR/ld-linux-x86-64.so.2" ]]; then
+    # ── Glibc compat mode: run via bundled dynamic linker ────────────────
+    # Build library path: bundled glibc first, then system paths for CUDA/GPU
+    LIB_PATH="$LIBS_DIR"
+    for p in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/local/cuda/lib64 /usr/local/lib /usr/lib; do
+        [[ -d "$p" ]] && LIB_PATH="$LIB_PATH:$p"
+    done
+    # Include NVIDIA driver library directories
+    for nv in /usr/lib/x86_64-linux-gnu/nvidia/current /usr/lib/nvidia-*; do
+        [[ -d "$nv" ]] && LIB_PATH="$LIB_PATH:$nv"
+    done
+
+    echo "Using bundled glibc compatibility libraries"
+    echo ""
+    "$LIBS_DIR/ld-linux-x86-64.so.2" --library-path "$LIB_PATH" \
+        "$HASHWARP" \
+        -P "$CONNECT_URL" \
+        --api-port "$API_PORT" \
+        --HWMON 1 \
+        --nocolor \
+        --syslog \
+        $EXTRA_ARGS
+else
+    # ── Native mode: system glibc is new enough ─────────────────────────
+    "$HASHWARP" \
+        -P "$CONNECT_URL" \
+        --api-port "$API_PORT" \
+        --HWMON 1 \
+        --nocolor \
+        --syslog \
+        $EXTRA_ARGS
+fi
