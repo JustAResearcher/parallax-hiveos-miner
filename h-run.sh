@@ -35,27 +35,40 @@ API_PORT=$(jq -r   '.api_port   // 21550'   config.json)
 EXTRA_ARGS=$(jq -r '.extra_args // ""'       config.json)
 
 # ── Safety net: recover pool URL if config has localhost default ──────────────
-SAVED_URL_FILE="$MINER_DIR/.saved_pool_url"
-SAVED_WALLET_FILE="$MINER_DIR/.saved_wallet"
+SAVED_URL_FILE="/tmp/parallax_saved_pool_url"
+SAVED_WALLET_FILE="/tmp/parallax_saved_wallet"
 
 if [[ "$POOL_URL" == "http://127.0.0.1:8545" || -z "$POOL_URL" ]]; then
     echo "WARNING: config.json has default/empty pool_url ($POOL_URL)"
-    # Try rig.conf first
-    [[ -f /hive-config/rig.conf ]] && source /hive-config/rig.conf
-    if [[ -n "$CUSTOM_URL" ]]; then
-        POOL_URL="$CUSTOM_URL"
-        echo "  Recovered from rig.conf: $POOL_URL"
-    elif [[ -s "$SAVED_URL_FILE" ]]; then
+    # Try /tmp/ saved file first (most reliable)
+    if [[ -s "$SAVED_URL_FILE" ]]; then
         POOL_URL=$(cat "$SAVED_URL_FILE")
-        echo "  Recovered from .saved_pool_url: $POOL_URL"
+        echo "  Recovered from $SAVED_URL_FILE: $POOL_URL"
     else
-        echo "FATAL: No valid pool URL found anywhere!"
-        echo "  config.json pool_url: $(jq -r '.pool_url' config.json 2>/dev/null)"
-        echo "  CUSTOM_URL from rig.conf: '$CUSTOM_URL'"
-        echo "  .saved_pool_url: not found"
-        echo "Set Pool URL in your HiveOS flight sheet to your prlx node RPC (e.g. http://192.168.1.100:8545)"
-        exit 1
+        # Try rig.conf
+        [[ -f /hive-config/rig.conf ]] && source /hive-config/rig.conf
+        if [[ -n "$CUSTOM_URL" ]]; then
+            POOL_URL="$CUSTOM_URL"
+            echo "  Recovered from rig.conf CUSTOM_URL: $POOL_URL"
+        else
+            # Last resort: grep for any http URL with :8545 in rig.conf
+            GREP_URL=$(grep -oP 'http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:8545' /hive-config/rig.conf 2>/dev/null | head -1)
+            if [[ -n "$GREP_URL" ]]; then
+                POOL_URL="$GREP_URL"
+                echo "  Recovered by grep from rig.conf: $POOL_URL"
+            else
+                echo "FATAL: No valid pool URL found anywhere!"
+                echo "  config.json pool_url: $(jq -r '.pool_url' config.json 2>/dev/null)"
+                echo "  $SAVED_URL_FILE: not found"
+                echo "  CUSTOM_URL from rig.conf: ''"
+                echo "  grep rig.conf for :8545: no match"
+                echo "Set Pool URL in your HiveOS flight sheet to your prlx node RPC (e.g. http://192.168.1.100:8545)"
+                exit 1
+            fi
+        fi
     fi
+    # Save it so future restarts work
+    echo "$POOL_URL" > "$SAVED_URL_FILE"
     # Re-detect mode
     if [[ "$POOL_URL" == http://* || "$POOL_URL" == https://* ]]; then
         MODE="getwork"
@@ -67,7 +80,7 @@ fi
 # Recover wallet too if empty
 if [[ -z "$WALLET" && -s "$SAVED_WALLET_FILE" ]]; then
     WALLET=$(cat "$SAVED_WALLET_FILE")
-    echo "  Recovered wallet from .saved_wallet: $WALLET"
+    echo "  Recovered wallet from $SAVED_WALLET_FILE: $WALLET"
 fi
 
 # ── Locate SRBMiner ──────────────────────────────────────────────────────────
