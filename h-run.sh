@@ -39,7 +39,9 @@ SRBMINER=""
 for sp in \
     "$MINER_DIR/srbminer/SRBMiner-MULTI" \
     "/hive/miners/srbminer-multi/SRBMiner-MULTI" \
-    "/hive/miners/srbminer/SRBMiner-MULTI"; do
+    "/hive/miners/srbminer/SRBMiner-MULTI" \
+    /hive/miners/srbminer/*/SRBMiner-MULTI \
+    /hive/miners/srbminer-multi/*/SRBMiner-MULTI; do
     if [[ -x "$sp" ]]; then
         SRBMINER="$sp"
         break

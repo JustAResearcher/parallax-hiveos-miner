@@ -3,13 +3,16 @@
 # Parallax Miner for HiveOS — Installer
 #
 # Downloads SRBMiner-Multi if not already present on the system.
-# Override version:  export SRBMINER_VER=2.8.4 && bash h-install.sh
+# Override version:  export SRBMINER_VER=3.1.2 && bash h-install.sh
 ###############################################################################
 
 MINER_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$MINER_DIR"
 
-SRBMINER_VER="${SRBMINER_VER:-2.8.4}"
+# Ensure all our scripts are executable (safety net for tar permission issues)
+chmod +x "$MINER_DIR"/*.sh "$MINER_DIR"/*.py 2>/dev/null
+
+SRBMINER_VER="${SRBMINER_VER:-3.1.5}"
 SRBMINER_TAG="${SRBMINER_VER//./-}"
 LOCAL_DIR="$MINER_DIR/srbminer"
 LOCAL_BIN="$LOCAL_DIR/SRBMiner-MULTI"
@@ -21,18 +24,36 @@ if [[ -x "$LOCAL_BIN" ]]; then
 fi
 
 # ── Check system-installed SRBMiner on HiveOS ────────────────────────────────
-for sysdir in /hive/miners/srbminer-multi /hive/miners/srbminer; do
+# HiveOS keeps miners in various versioned subdirectories
+SYSTEM_PATHS=(
+    /hive/miners/srbminer-multi
+    /hive/miners/srbminer
+)
+for sysdir in "${SYSTEM_PATHS[@]}"; do
+    # Direct binary in the directory
     if [[ -x "$sysdir/SRBMiner-MULTI" ]]; then
-        echo "Found system SRBMiner at $sysdir — copying to local..."
-        cp -a "$sysdir" "$LOCAL_DIR"
-        chmod +x "$LOCAL_BIN"
+        echo "Found system SRBMiner at $sysdir -- symlink to local..."
+        mkdir -p "$LOCAL_DIR"
+        ln -sf "$sysdir/SRBMiner-MULTI" "$LOCAL_BIN"
         echo "Done."
         exit 0
+    fi
+    # Check versioned subdirectories (e.g. /hive/miners/srbminer/3.1.1/SRBMiner-MULTI)
+    if [[ -d "$sysdir" ]]; then
+        for sub in "$sysdir"/*/SRBMiner-MULTI; do
+            if [[ -x "$sub" ]]; then
+                echo "Found system SRBMiner at $sub -- symlink to local..."
+                mkdir -p "$LOCAL_DIR"
+                ln -sf "$sub" "$LOCAL_BIN"
+                echo "Done."
+                exit 0
+            fi
+        done
     fi
 done
 
 # ── Download from GitHub ─────────────────────────────────────────────────────
-ARCHIVE="SRBMiner-Multi-${SRBMINER_TAG}-Linux.tar.xz"
+ARCHIVE="SRBMiner-Multi-${SRBMINER_TAG}-Linux.tar.gz"
 URL="https://github.com/doktor83/SRBMiner-Multi/releases/download/${SRBMINER_VER}/${ARCHIVE}"
 EXTRACTED="SRBMiner-Multi-${SRBMINER_TAG}"
 
@@ -51,7 +72,7 @@ if [[ $? -ne 0 ]]; then
     echo "  1. Check internet connectivity"
     echo "  2. Install SRBMiner via HiveOS miner manager (hiveos.farm → Miners)"
     echo "  3. Try a different version:"
-    echo "       export SRBMINER_VER=2.7.9 && bash h-install.sh"
+    echo "       export SRBMINER_VER=3.1.2 && bash h-install.sh"
     echo ""
     rm -f "$ARCHIVE"
     exit 1
