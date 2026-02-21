@@ -90,6 +90,6 @@ else
     exit 1
 fi
 
-# Make all scripts executable
-chmod +x "$MINER_DIR"/*.sh 2>/dev/null
+# Make all scripts executable (critical — tar on some systems drops +x)
+chmod +x "$MINER_DIR"/*.sh "$MINER_DIR"/*.py 2>/dev/null
 echo "Installation complete."
