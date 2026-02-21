@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 ###############################################################################
-# Parallax Miner for HiveOS -- Configuration Generator  (v1.4)
+# Parallax Miner for HiveOS -- Configuration Generator  (v1.5)
 #
 # Reads HiveOS flight sheet variables and writes config.json
 #
@@ -9,37 +9,61 @@
 #                      OR stratum proxy (e.g. 192.168.1.100:4444)
 #   Wallet/Worker   -> %WAL%.%WORKER_NAME%
 #   Extra Config    -> JSON: {"extra_args":"--gpu-id 0", "api_port": 21550}
+#
+# IMPORTANT: The pool URL is persisted to .saved_pool_url so it survives
+# HiveOS calling h-config.sh multiple times with empty env vars.
 ###############################################################################
 
 MINER_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$MINER_DIR"
 
+SAVED_URL_FILE="$MINER_DIR/.saved_pool_url"
+SAVED_WALLET_FILE="$MINER_DIR/.saved_wallet"
+
+echo "=== h-config.sh v1.5 ==="
+echo "  CUSTOM_URL='$CUSTOM_URL'"
+echo "  CUSTOM_TEMPLATE='$CUSTOM_TEMPLATE'"
+
 # Source HiveOS rig config for CUSTOM_* variables
 [[ -f /hive-config/rig.conf ]] && source /hive-config/rig.conf
 
+echo "  After rig.conf: CUSTOM_URL='$CUSTOM_URL'"
+echo "  After rig.conf: CUSTOM_TEMPLATE='$CUSTOM_TEMPLATE'"
+
 # -- Pool / node URL --
 POOL_URL="$CUSTOM_URL"
-
-# ── GUARD ────────────────────────────────────────────────────────────────────
-# HiveOS may call h-config.sh multiple times. On restarts the CUSTOM_*
-# environment variables are sometimes empty.  If we already have a valid
-# config.json and no new CUSTOM_URL was provided, keep the existing config
-# unconditionally.  This avoids overwriting a good config with defaults.
-# No jq dependency — just a simple file-existence check.
-if [[ -z "$POOL_URL" && -s "$MINER_DIR/config.json" ]]; then
-    echo "h-config.sh: CUSTOM_URL is empty but config.json already exists — keeping it."
-    cat "$MINER_DIR/config.json"
-    exit 0
-fi
-
-# If CUSTOM_URL is still empty here, this is a truly fresh install with no
-# flight sheet.  Fall back to localhost so the config file is at least valid.
-[[ -z "$POOL_URL" ]] && POOL_URL="http://127.0.0.1:8545"
 
 # -- Parse wallet & worker from template --
 WALLET=$(echo "$CUSTOM_TEMPLATE" | cut -d'.' -f1)
 WORKER=$(echo "$CUSTOM_TEMPLATE" | cut -d'.' -f2-)
 [[ -z "$WORKER" || "$WORKER" == "$WALLET" ]] && WORKER="${WORKER_NAME:-$(hostname)}"
+
+# ── PERSIST / RECOVER ────────────────────────────────────────────────────────
+# If we have a real POOL_URL from the flight sheet, save it for future use.
+# If we DON'T have one, recover from the saved file.
+if [[ -n "$POOL_URL" ]]; then
+    echo "$POOL_URL" > "$SAVED_URL_FILE"
+    echo "  Saved pool URL: $POOL_URL"
+else
+    echo "  CUSTOM_URL is empty — checking saved URL..."
+    if [[ -s "$SAVED_URL_FILE" ]]; then
+        POOL_URL=$(cat "$SAVED_URL_FILE")
+        echo "  Recovered pool URL from .saved_pool_url: $POOL_URL"
+    else
+        echo "  No saved URL found — using default localhost"
+        POOL_URL="http://127.0.0.1:8545"
+    fi
+fi
+
+# Same for wallet
+if [[ -n "$WALLET" ]]; then
+    echo "$WALLET" > "$SAVED_WALLET_FILE"
+else
+    if [[ -s "$SAVED_WALLET_FILE" ]]; then
+        WALLET=$(cat "$SAVED_WALLET_FILE")
+        echo "  Recovered wallet from .saved_wallet: $WALLET"
+    fi
+fi
 
 # Auto-detect mode from URL scheme
 #   http://...     -> "getwork"  (run embedded stratum proxy + SRBMiner)
