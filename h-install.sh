@@ -27,12 +27,8 @@ if [[ -x "$LOCAL_BIN" ]]; then
         "$LOCAL_BIN" -V 2>/dev/null
         exit 0
     elif [[ -d "$LIBS_DIR" && -f "$LIBS_DIR/ld-linux-x86-64.so.2" ]]; then
-        # Test with compat libs
-        if "$LIBS_DIR/ld-linux-x86-64.so.2" --library-path "$LIBS_DIR" "$LOCAL_BIN" -V >/dev/null 2>&1; then
-            echo "HashWarp already installed (with glibc compat) at $LOCAL_BIN"
-            "$LIBS_DIR/ld-linux-x86-64.so.2" --library-path "$LIBS_DIR" "$LOCAL_BIN" -V 2>/dev/null
-            exit 0
-        fi
+        echo "HashWarp already installed (with glibc compat) at $LOCAL_BIN"
+        exit 0
     fi
     echo "HashWarp binary exists but doesn't run — reinstalling..."
     rm -f "$LOCAL_BIN"
@@ -203,14 +199,38 @@ fi
 echo ""
 echo "Testing HashWarp with compatibility libraries..."
 
-# Build library path: bundle first, then system paths for CUDA/GPU
+# Build comprehensive library path: bundled glibc + ALL system lib dirs
 LIB_PATH="$LIBS_DIR"
-for p in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/local/cuda/lib64 /usr/lib; do
+
+# Read all paths from system ldconfig config (covers CUDA, NVIDIA, etc.)
+if [[ -d /etc/ld.so.conf.d ]]; then
+    while IFS= read -r line; do
+        line="${line%%#*}"  # strip comments
+        line="${line// /}"  # strip whitespace
+        [[ -d "$line" ]] && LIB_PATH="$LIB_PATH:$line"
+    done < <(cat /etc/ld.so.conf.d/*.conf 2>/dev/null)
+fi
+
+# Add well-known paths that may not be in ldconfig
+for p in /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu /usr/local/lib /usr/lib; do
     [[ -d "$p" ]] && LIB_PATH="$LIB_PATH:$p"
 done
-for nv in /usr/lib/x86_64-linux-gnu/nvidia/current /usr/lib/nvidia-*; do
+
+# Glob for all CUDA toolkit versions
+for cuda in /usr/local/cuda*/lib64 /usr/local/cuda*/lib; do
+    [[ -d "$cuda" ]] && LIB_PATH="$LIB_PATH:$cuda"
+done
+
+# Glob for all NVIDIA driver library directories
+for nv in \
+    /usr/lib/x86_64-linux-gnu/nvidia/current \
+    /usr/lib/nvidia-* \
+    /usr/lib/x86_64-linux-gnu/nvidia-* \
+    /usr/lib64/nvidia; do
     [[ -d "$nv" ]] && LIB_PATH="$LIB_PATH:$nv"
 done
+
+echo "  Library path: $LIB_PATH"
 
 if "$LIBS_DIR/ld-linux-x86-64.so.2" --library-path "$LIB_PATH" "$LOCAL_BIN" -V >/dev/null 2>&1; then
     echo "HashWarp works with glibc compatibility libraries!"
@@ -219,6 +239,12 @@ else
     echo ""
     echo "ERROR: HashWarp still fails with compat libraries:"
     "$LIBS_DIR/ld-linux-x86-64.so.2" --library-path "$LIB_PATH" "$LOCAL_BIN" -V 2>&1 || true
+    echo ""
+    echo "Detected library search path:"
+    echo "$LIB_PATH" | tr ':' '\n'
+    echo ""
+    echo "Looking for libcudart:"
+    find / -name 'libcudart*' -type f 2>/dev/null | head -10
     echo ""
     echo "You may need to update HiveOS:  hive-replace --stable"
     exit 1
