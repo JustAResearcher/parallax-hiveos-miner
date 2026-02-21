@@ -1,0 +1,20 @@
+# SRBMiner download (not distributed with the repo)
+srbminer/
+SRBMiner-Multi-*/
+
+# Runtime files
+config.json
+proxy.log
+srbminer.log
+*.log
+
+# Build output
+*.tar.gz
+staging/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+__pycache__/
+*.pyc
