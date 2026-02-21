@@ -102,70 +102,72 @@ echo "  API:     http://localhost:$API_PORT"
 echo ""
 
 # ── GPU auto-tuning ──────────────────────────────────────────────────────────
-# Detect GPU model and set optimal HashWarp parameters.
+# Detect GPU model and set optimal HashWarp CUDA parameters.
+# The HiveOS package uses the CUDA build — use --cu-grid-size / --cu-block-size.
+# (OpenCL flags like --cl-global-work are NOT supported in CUDA mode.)
 # User can override via extra_args in flight sheet Extra Config JSON.
 
-if [[ -z "$EXTRA_ARGS" ]] || ! echo "$EXTRA_ARGS" | grep -q "cl-global-work"; then
-    # No user-specified tuning — auto-detect GPU and apply optimal settings
+if [[ -z "$EXTRA_ARGS" ]] || ! echo "$EXTRA_ARGS" | grep -qE "cu-grid-size|cu-block-size|cuda"; then
+    # No user-specified tuning — auto-detect GPU and apply optimal CUDA settings
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs)
+
+    # Probe which CUDA tuning flags HashWarp accepts
+    HASHWARP_HELP=$("$HASHWARP" --help 2>&1 || true)
+    HAS_CU_GRID=false
+    HAS_CU_BLOCK=false
+    HAS_NOEVAL=false
+    echo "$HASHWARP_HELP" | grep -q "cu-grid-size"  && HAS_CU_GRID=true
+    echo "$HASHWARP_HELP" | grep -q "cu-block-size"  && HAS_CU_BLOCK=true
+    echo "$HASHWARP_HELP" | grep -q "noeval"          && HAS_NOEVAL=true
+
+    # CUDA tuning:
+    #   --cu-grid-size  = number of CUDA blocks (more = more parallelism)
+    #   --cu-block-size = threads per block (128 is usually optimal)
+    GRID=8192
+    BLOCK=128
 
     case "$GPU_NAME" in
         *5090*)
-            # RTX 5090 (Blackwell, 21760 cores, 32GB) — tested optimal
-            TUNING="--cl-global-work 4194304 --cl-local-work 256 --noeval"
-            ;;
+            GRID=16384; BLOCK=256 ;;
         *5080*)
-            # RTX 5080 (Blackwell, 10752 cores, 16GB)
-            TUNING="--cl-global-work 2097152 --cl-local-work 256 --noeval"
-            ;;
+            GRID=8192;  BLOCK=256 ;;
         *4090*)
-            # RTX 4090 (Ada, 16384 cores, 24GB)
-            TUNING="--cl-global-work 4194304 --cl-local-work 256 --noeval"
-            ;;
+            GRID=16384; BLOCK=256 ;;
         *"4070 Ti Super"*|*"4070 SUPER Ti"*)
-            # RTX 4070 Ti Super (Ada, 8448 cores, 16GB) — your rigs
-            TUNING="--cl-global-work 2097152 --cl-local-work 128 --noeval"
-            ;;
+            GRID=8192;  BLOCK=128 ;;
         *"4070 Ti"*)
-            # RTX 4070 Ti (Ada, 7680 cores, 12GB)
-            TUNING="--cl-global-work 2097152 --cl-local-work 128 --noeval"
-            ;;
+            GRID=8192;  BLOCK=128 ;;
         *4070*Super*|*4070*SUPER*)
-            # RTX 4070 Super (Ada, 7168 cores, 12GB)
-            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
-            ;;
+            GRID=4096;  BLOCK=128 ;;
         *4070*)
-            # RTX 4070 (Ada, 5888 cores, 12GB)
-            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
-            ;;
+            GRID=4096;  BLOCK=128 ;;
         *4060*Ti*|*4060*TI*)
-            # RTX 4060 Ti (Ada, 4352 cores, 8/16GB)
-            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
-            ;;
+            GRID=4096;  BLOCK=128 ;;
         *4060*)
-            # RTX 4060 (Ada, 3072 cores, 8GB)
-            TUNING="--cl-global-work 524288 --cl-local-work 128 --noeval"
-            ;;
+            GRID=2048;  BLOCK=128 ;;
         *3090*|*3080*)
-            # RTX 30-series high-end (Ampere)
-            TUNING="--cl-global-work 2097152 --cl-local-work 128 --noeval"
-            ;;
+            GRID=8192;  BLOCK=128 ;;
         *3070*|*3060*Ti*)
-            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
-            ;;
+            GRID=4096;  BLOCK=128 ;;
         *3060*)
-            TUNING="--cl-global-work 524288 --cl-local-work 128 --noeval"
-            ;;
-        *)
-            # Unknown GPU — safe defaults
-            TUNING="--cl-global-work 1048576 --cl-local-work 128 --noeval"
-            ;;
+            GRID=2048;  BLOCK=128 ;;
     esac
 
-    echo "GPU detected:  $GPU_NAME"
-    echo "Auto-tuning:   $TUNING"
+    TUNING=""
+    $HAS_CU_GRID  && TUNING="$TUNING --cu-grid-size $GRID"
+    $HAS_CU_BLOCK && TUNING="$TUNING --cu-block-size $BLOCK"
+    $HAS_NOEVAL   && TUNING="$TUNING --noeval"
+
+    if [[ -n "$GPU_NAME" ]]; then
+        echo "GPU detected:  $GPU_NAME"
+    fi
+    if [[ -n "$TUNING" ]]; then
+        echo "Auto-tuning:   $TUNING"
+        EXTRA_ARGS="$TUNING $EXTRA_ARGS"
+    else
+        echo "No tuning flags available in this HashWarp build — using defaults"
+    fi
     echo ""
-    EXTRA_ARGS="$TUNING $EXTRA_ARGS"
 else
     echo "Using user-specified tuning from extra_args"
     echo ""
